@@ -1,2 +1,2 @@
 # async-walkdir
-Asynchronous directory traversal for Rust
+Asynchronous directory traversal for Rust.
