@@ -1,2 +1,40 @@
 # async-walkdir
 Asynchronous directory traversal for Rust.
+
+Based on [async-fs][2] and [blocking][3],
+it uses a thread pool to handle blocking IOs. Please refere to those crates for the rationale.
+This crate is compatible with any async runtime based on [futures 0.3][4],
+which includes [tokio][5], [async-std][6] and [smol][7].
+
+We do not plan to be as feature full as [Walkdir][1] crate in the synchronous world, but
+we plan to add filtering capabilities which will allow to adress most cases handled by [Walkdir][1].
+
+# Example
+
+```rust
+use async_walkdir::WalkDir;
+use futures_lite::future::block_on;
+use futures_lite::stream::StreamExt;
+
+block_on(async {
+    let mut entries = WalkDir::new("my_directory");
+    loop {
+        match entries.next().await {
+            Some(Ok(entry)) => println!("file: {}", entry.path().display()),
+            Some(Err(e)) => {
+                eprintln!("error: {}", e);
+                break;
+            },
+            None => break,
+        }
+    }
+});
+```
+
+[1]: https://docs.rs/walkdir
+[2]: https://docs.rs/async-fs
+[3]: https://docs.rs/blocking
+[4]: https://docs.rs/futures-core
+[5]: https://docs.rs/tokio
+[6]: https://docs.rs/async-std
+[7]: https://docs.rs/smol
