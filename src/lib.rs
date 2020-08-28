@@ -44,6 +44,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -69,14 +70,35 @@ type BoxStream = futures_lite::stream::Boxed<Result<DirEntry>>;
 ///
 /// Panics if the directories depth overflows `usize`.
 pub struct WalkDir {
+    root: PathBuf,
     entries: BoxStream,
 }
+
+/// Filter entries.
+pub type Filter = Box<dyn FnMut(&DirEntry) -> BoxedFut<bool> + Send>;
 
 impl WalkDir {
     /// Returns a new `Walkdir` starting at `root`.
     pub fn new(root: impl AsRef<Path>) -> Self {
         Self {
-            entries: walk_dir(root),
+            root: root.as_ref().to_owned(),
+            entries: walk_dir(root, None),
+        }
+    }
+
+    /// Filter entries.
+    pub fn filter<F, Fut>(self, f: F) -> Self
+    where
+        F: FnMut(&'static DirEntry) -> Fut + Send + 'static,
+        Fut: Future<Output = bool> + Send + 'static,
+    {
+        let root = self.root.clone();
+        Self {
+            root: self.root,
+            entries: walk_dir(
+                root,
+                Some(Box::new(|entry: &'static DirEntry| f(entry).boxed())),
+            ),
         }
     }
 }
@@ -90,37 +112,40 @@ impl Stream for WalkDir {
     }
 }
 
-fn walk_dir(root: impl AsRef<Path>) -> BoxStream {
-    stream::unfold(State::Start(root.as_ref().to_owned()), |state| async move {
-        match state {
-            State::Start(root) => match read_dir(root).await {
-                Err(e) => return Some((Err(e), State::Done)),
-                Ok(rd) => return walk(vec![rd]).await,
-            },
-            State::Walk(dirs) => return walk(dirs).await,
-            State::Done => return None,
-        }
-    })
+fn walk_dir(root: impl AsRef<Path>, filter: Option<Filter>) -> BoxStream {
+    stream::unfold(
+        State::Start((root.as_ref().to_owned(), filter)),
+        move |state| async move {
+            match state {
+                State::Start((root, filter)) => match read_dir(root).await {
+                    Err(e) => return Some((Err(e), State::Done)),
+                    Ok(rd) => return walk(vec![rd], filter).await,
+                },
+                State::Walk((dirs, filter)) => return walk(dirs, filter).await,
+                State::Done => return None,
+            }
+        },
+    )
     .boxed()
 }
 
 enum State {
-    Start(PathBuf),
-    Walk(Vec<ReadDir>),
+    Start((PathBuf, Option<Filter>)),
+    Walk((Vec<ReadDir>, Option<Filter>)),
     Done,
 }
 
 type UnfoldState = Option<(Result<DirEntry>, State)>;
 
-fn walk(mut dirs: Vec<ReadDir>) -> BoxedFut<UnfoldState> {
+fn walk(mut dirs: Vec<ReadDir>, filter: Option<Filter>) -> BoxedFut<UnfoldState> {
     async move {
         if let Some(dir) = dirs.last_mut() {
             match dir.next().await {
-                Some(Ok(entry)) => walk_entry(entry, dirs).await,
-                Some(Err(e)) => Some((Err(e), State::Walk(dirs))),
+                Some(Ok(entry)) => walk_entry(entry, dirs, filter).await,
+                Some(Err(e)) => Some((Err(e), State::Walk((dirs, filter)))),
                 None => {
                     dirs.pop();
-                    walk(dirs).await
+                    walk(dirs, filter).await
                 }
             }
         } else {
@@ -130,24 +155,28 @@ fn walk(mut dirs: Vec<ReadDir>) -> BoxedFut<UnfoldState> {
     .boxed()
 }
 
-async fn walk_entry(entry: DirEntry, mut dirs: Vec<ReadDir>) -> UnfoldState {
+async fn walk_entry(
+    entry: DirEntry,
+    mut dirs: Vec<ReadDir>,
+    filter: Option<Filter>,
+) -> UnfoldState {
     match entry.file_type().await {
-        Err(e) => Some((Err(e), State::Walk(dirs))),
+        Err(e) => Some((Err(e), State::Walk((dirs, filter)))),
         Ok(ft) if ft.is_dir() => {
             let rd = match read_dir(entry.path()).await {
                 Err(e) => return Some((Err(e), State::Done)),
                 Ok(rd) => rd,
             };
             dirs.push(rd);
-            Some((Ok(entry), State::Walk(dirs)))
+            Some((Ok(entry), State::Walk((dirs, filter))))
         }
-        Ok(_) => Some((Ok(entry), State::Walk(dirs))),
+        Ok(_) => Some((Ok(entry), State::Walk((dirs, filter)))),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::WalkDir;
+    use super::{DirEntry, WalkDir};
     use futures_lite::future::block_on;
     use futures_lite::stream::StreamExt;
     use std::io::{ErrorKind, Result};
@@ -196,6 +225,42 @@ mod tests {
                 f1.to_owned(),
             ];
             let mut wd = WalkDir::new(root.path());
+
+            let mut got = Vec::new();
+            while let Some(entry) = wd.next().await {
+                let entry = entry.unwrap();
+                got.push(entry.path());
+            }
+            got.sort();
+            assert_eq!(got, want);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn filter_dirs() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            let f1 = root.path().join("f1.txt");
+            let d1 = root.path().join("d1");
+            let f2 = d1.join("f2.txt");
+            let d2 = d1.join("d2");
+            let f3 = d2.join("f3.txt");
+
+            async_fs::create_dir_all(&d2).await?;
+            async_fs::write(&f1, []).await?;
+            async_fs::write(&f2, []).await?;
+            async_fs::write(&f3, []).await?;
+
+            let want = vec![f3.to_owned(), f2.to_owned(), f1.to_owned()];
+
+            let mut wd = WalkDir::new(root.path()).filter(|entry: &'static DirEntry| async move {
+                match entry.file_type().await {
+                    Ok(ft) if ft.is_dir() => false,
+                    _ => true,
+                }
+            });
 
             let mut got = Vec::new();
             while let Some(entry) = wd.next().await {
