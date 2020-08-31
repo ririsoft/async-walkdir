@@ -21,6 +21,8 @@
 //!
 //! # Example
 //!
+//! Recursively traverse a directory:
+//!
 //! ```
 //! use async_walkdir::WalkDir;
 //! use futures_lite::future::block_on;
@@ -34,7 +36,39 @@
 //!             Some(Err(e)) => {
 //!                 eprintln!("error: {}", e);
 //!                 break;
-//!             },
+//!             }
+//!             None => break,
+//!         }
+//!     }
+//! });
+//! ```
+//!
+//! Do not recurse through directories whose name starts with '.':
+//!
+//! ```
+//! use async_walkdir::{Filtering, WalkDir};
+//! use futures_lite::future::block_on;
+//! use futures_lite::stream::StreamExt;
+//!
+//! block_on(async {
+//!     let mut entries = WalkDir::new("my_directory").filter(|entry| async move {
+//!         if let Some(true) = entry
+//!             .path()
+//!             .file_name()
+//!             .map(|f| f.to_string_lossy().starts_with('.'))
+//!         {
+//!             return Filtering::IgnoreDir;
+//!         }
+//!         Filtering::Continue
+//!     });
+//!
+//!     loop {
+//!         match entries.next().await {
+//!             Some(Ok(entry)) => println!("file: {}", entry.path().display()),
+//!             Some(Err(e)) => {
+//!                 eprintln!("error: {}", e);
+//!                 break;
+//!             }
 //!             None => break,
 //!         }
 //!     }
