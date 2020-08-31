@@ -1,3 +1,4 @@
+[![Github CI](https://github.com/ririsoft/async-walkdir/workflows/Rust/badge.svg)](https://github.com/ririsoft/async-walkdir/actions)
 # async-walkdir
 Asynchronous directory traversal for Rust.
 
