@@ -1,0 +1,21 @@
+[package]
+name = "async-walkdir"
+version = "0.1.0"
+authors = ["Ririsoft <riri@ririsoft.com>"]
+edition = "2018"
+description = "Asynchronous directory traversal for Rust."
+license = "Apache-2.0"
+keywords = ["async", "walk", "directory", "recursive", "iterator", "stream"]
+categories = ["asynchronous", "filesystem"]
+homepage = "https://github.com/ririsoft/async-walkdir"
+repository = "https://github.com/ririsoft/async-walkdir"
+documentation = "https://docs.rs/async-walkdir/"
+exclude = [ "/.github/*" ]
+readme = "README.md"
+
+[dependencies]
+futures-lite = "0.1"
+async-fs = "1.1"
+
+[dev-dependencies]
+tempfile = "3.1.0"
