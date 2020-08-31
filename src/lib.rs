@@ -117,7 +117,7 @@ pub enum Filtering {
     /// Ignore the current entry and, if a directory,
     /// do not traverse its childs.
     IgnoreDir,
-    /// Coninue the normal processing.
+    /// Continue the normal processing.
     Continue,
 }
 
