@@ -7,7 +7,7 @@ This crate is compatible with any async runtime based on [futures 0.3][4],
 which includes [tokio][5], [async-std][6] and [smol][7].
 
 We do not plan to be as feature full as [Walkdir][1] crate in the synchronous world, but
-we plan to add filtering capabilities which will allow to adress most cases handled by [Walkdir][1].
+do not hesitate to open an issue or a PR.
 
 # Example
 
