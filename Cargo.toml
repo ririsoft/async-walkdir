@@ -14,7 +14,7 @@ exclude = [ "/.github/*" ]
 readme = "README.md"
 
 [dependencies]
-futures-lite = "0.1"
+futures-lite = "1.2"
 async-fs = "1.1"
 
 [dev-dependencies]
