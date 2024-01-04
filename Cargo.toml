@@ -2,7 +2,7 @@
 name = "async-walkdir"
 version = "1.0.0"
 authors = ["Ririsoft <riri@ririsoft.com>"]
-edition = "2018"
+edition = "2021"
 description = "Asynchronous directory traversal for Rust."
 license = "Apache-2.0"
 keywords = ["async", "walk", "directory", "recursive", "stream"]
