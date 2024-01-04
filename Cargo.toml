@@ -1,6 +1,6 @@
 [package]
 name = "async-walkdir"
-version = "0.2.0"
+version = "1.0.0"
 authors = ["Ririsoft <riri@ririsoft.com>"]
 edition = "2018"
 description = "Asynchronous directory traversal for Rust."
@@ -14,8 +14,8 @@ exclude = [ "/.github/*" ]
 readme = "README.md"
 
 [dependencies]
-futures-lite = "1.2"
-async-fs = "1.1"
+futures-lite = "2.1.0"
+async-fs = "2.1.0"
 
 [dev-dependencies]
-tempfile = "3.1.0"
+tempfile = "3.9.0"

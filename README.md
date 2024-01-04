@@ -4,8 +4,7 @@ Asynchronous directory traversal for Rust.
 
 Based on [async-fs][2] and [blocking][3],
 it uses a thread pool to handle blocking IOs. Please refere to those crates for the rationale.
-This crate is compatible with any async runtime based on [futures 0.3][4],
-which includes [tokio][5], [async-std][6] and [smol][7].
+This crate is compatible with async runtimes [tokio][5], [async-std][6], [smol][7] and potentially any runtime based on [futures 0.3][4]
 
 We do not plan to be as feature full as [Walkdir][1] crate in the synchronous world, but
 do not hesitate to open an issue or a PR.
