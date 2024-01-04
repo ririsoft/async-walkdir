@@ -166,11 +166,11 @@ where
         move |state| async move {
             match state {
                 State::Start((root, filter)) => match read_dir(root).await {
-                    Err(e) => return Some((Err(e), State::Done)),
-                    Ok(rd) => return walk(vec![rd], filter).await,
+                    Err(e) => Some((Err(e), State::Done)),
+                    Ok(rd) => walk(vec![rd], filter).await,
                 },
-                State::Walk((dirs, filter)) => return walk(dirs, filter).await,
-                State::Done => return None,
+                State::Walk((dirs, filter)) => walk(dirs, filter).await,
+                State::Done => None,
             }
         },
     )
