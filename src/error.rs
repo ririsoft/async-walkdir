@@ -1,5 +1,7 @@
 use std::{
-    error, fmt, io, ops::Deref, path::{Path, PathBuf}
+    error, fmt, io,
+    ops::Deref,
+    path::{Path, PathBuf},
 };
 
 /// A wrapper around [`io::Error`] that includes the associated path.
