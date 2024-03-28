@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2020-2024 Ririsoft <riri@ririsoft.com>
+// SPDX-FileCopyrightText: 2024 Jordan Danford <jordandanford@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+
 use std::{
     error, fmt, io,
     ops::Deref,
