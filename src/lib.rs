@@ -96,7 +96,7 @@ pub use async_fs::DirEntry;
 
 pub use error::Error;
 
-/// A specialized [`Result`] type.
+/// A specialized [`Result`][`std::result::Result`] type.
 pub type Result<T> = std::result::Result<T, Error>;
 
 type BoxStream = futures_lite::stream::Boxed<Result<DirEntry>>;
