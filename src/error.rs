@@ -3,66 +3,40 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    error, fmt, io,
-    ops::Deref,
+    io,
     path::{Path, PathBuf},
 };
 
-/// A wrapper around [`io::Error`] that includes the associated path.
-#[derive(Debug)]
-pub struct Error {
-    path: PathBuf,
-    inner: io::Error,
-}
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+/// An error produced during a directory tree traversal.
+pub struct Error(#[from] InnerError);
 
 impl Error {
-    /// Create a new [`Error`]
-    pub fn new(path: PathBuf, inner: io::Error) -> Self {
-        Error { path, inner }
+    /// Returns the path where the error occured if it applies,
+    /// for instance during IO operations.
+    pub fn path(&self) -> Option<&Path> {
+        let InnerError::Io { ref path, .. } = self.0;
+        Some(path)
     }
 
-    /// Returns the path associated with this error.
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Deref for Error {
-    type Target = io::Error;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+    /// Returns the original [`io::Error`] if any.
+    pub fn io(&self) -> Option<&io::Error> {
+        let InnerError::Io { ref source, .. } = self.0;
+        Some(source)
     }
 }
 
-impl error::Error for Error {
-    #[allow(deprecated)]
-    fn description(&self) -> &str {
-        self.inner.description()
-    }
-
-    fn cause(&self) -> Option<&dyn error::Error> {
-        self.source()
-    }
-
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        Some(&self.inner)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "IO error for operation on {}: {}",
-            self.path.display(),
-            self.inner
-        )
-    }
-}
-
-impl From<Error> for std::io::Error {
-    fn from(err: Error) -> Self {
-        err.inner
-    }
+#[derive(Debug, Error)]
+pub enum InnerError {
+    #[error("IO error at '{path}': {source}")]
+    /// A error produced during an IO operation.
+    Io {
+        /// The path in the directory tree where the IO error occured.
+        path: PathBuf,
+        /// The IO error.
+        source: io::Error,
+    },
 }

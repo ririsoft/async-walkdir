@@ -95,6 +95,7 @@ use futures_lite::stream::{self, Stream, StreamExt};
 pub use async_fs::DirEntry;
 
 pub use error::Error;
+use error::InnerError;
 
 /// A specialized [`Result`][`std::result::Result`] type.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -172,7 +173,10 @@ where
         move |state| async move {
             match state {
                 State::Start((root, filter)) => match read_dir(&root).await {
-                    Err(e) => Some((Err(Error::new(root, e)), State::Done)),
+                    Err(source) => Some((
+                        Err(InnerError::Io { path: root, source }.into()),
+                        State::Done,
+                    )),
                     Ok(rd) => walk(vec![(root, rd)], filter).await,
                 },
                 State::Walk((dirs, filter)) => walk(dirs, filter).await,
@@ -203,8 +207,12 @@ where
         if let Some((path, dir)) = dirs.last_mut() {
             match dir.next().await {
                 Some(Ok(entry)) => walk_entry(entry, dirs, filter).await,
-                Some(Err(e)) => Some((
-                    Err(Error::new(path.to_path_buf(), e)),
+                Some(Err(source)) => Some((
+                    Err(InnerError::Io {
+                        path: path.to_path_buf(),
+                        source,
+                    }
+                    .into()),
                     State::Walk((dirs, filter)),
                 )),
                 None => {
@@ -230,8 +238,12 @@ where
 {
     async move {
         match entry.file_type().await {
-            Err(e) => Some((
-                Err(Error::new(entry.path(), e)),
+            Err(source) => Some((
+                Err(InnerError::Io {
+                    path: entry.path(),
+                    source,
+                }
+                .into()),
                 State::Walk((dirs, filter)),
             )),
             Ok(ft) => {
@@ -242,8 +254,11 @@ where
                 if ft.is_dir() {
                     let path = entry.path();
                     let rd = match read_dir(&path).await {
-                        Err(e) => {
-                            return Some((Err(Error::new(path, e)), State::Walk((dirs, filter))))
+                        Err(source) => {
+                            return Some((
+                                Err(InnerError::Io { path, source }.into()),
+                                State::Walk((dirs, filter)),
+                            ))
                         }
                         Ok(rd) => rd,
                     };
@@ -285,8 +300,11 @@ mod tests {
         block_on(async {
             let mut wd = WalkDir::new("foobar");
             match wd.next().await.unwrap() {
-                Ok(_) => panic!("want error"),
-                Err(e) => assert_eq!(e.kind(), ErrorKind::NotFound),
+                Err(e) => {
+                    assert_eq!(wd.root, e.path().unwrap());
+                    assert_eq!(e.io().unwrap().kind(), ErrorKind::NotFound);
+                }
+                _ => panic!("want IO error"),
             }
         })
     }
@@ -399,6 +417,34 @@ mod tests {
             got.sort();
             assert_eq!(got, want);
 
+            Ok(())
+        })
+    }
+}
+
+#[cfg(all(unix, test))]
+mod test_unix {
+    use async_fs::unix::PermissionsExt;
+    use std::io::Result;
+
+    use futures_lite::future::block_on;
+    use futures_lite::stream::StreamExt;
+
+    use super::WalkDir;
+    #[test]
+    fn walk_dir_error_path() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            let d1 = root.path().join("d1");
+            async_fs::create_dir_all(&d1).await?;
+            let mut perms = async_fs::metadata(&d1).await?.permissions();
+            perms.set_mode(0o222);
+            async_fs::set_permissions(&d1, perms).await?;
+            let mut wd = WalkDir::new(&root);
+            match wd.next().await.unwrap() {
+                Err(e) => assert_eq!(e.path().unwrap(), d1.as_path()),
+                _ => panic!("want IO error"),
+            }
             Ok(())
         })
     }
