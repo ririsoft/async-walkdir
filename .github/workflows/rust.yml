@@ -17,34 +17,34 @@ jobs:
     steps:
 
       - name: Checkout sources
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
           toolchain: stable
-          override: true
-          components: rustfmt, clippy
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Setup rust smart caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
 
       - name: Run cargo fmt
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
+        run: cargo fmt --all -- --check
 
       - name: Run cargo clippy
-        uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --tests -- -D warnings
+        run: cargo clippy --no-deps -- -D warnings
       
       - name: Run cargo build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-      
-      - name: Run cargo test
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
+        run: cargo build
+
+      - name: Cargo tests 
+        run: cargo test
+
+      - name: Setup cargo-llvm-cov
+        run: cargo install cargo-llvm-cov
+
+      - name: Run code coverage test
+        run: |
+          cargo llvm-cov test --fail-under-lines 90
