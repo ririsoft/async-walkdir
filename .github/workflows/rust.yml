@@ -3,6 +3,8 @@ on:
   push:
     branches:
       - master
+    tags-ignore:
+      - "v[0-9]+.*"
   pull_request:
     branches:
       - master
