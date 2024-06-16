@@ -20,6 +20,8 @@
 //! This crate is compatible with any async runtime based on [futures 0.3](https://docs.rs/futures-core),
 //! which includes [tokio](https://docs.rs/tokio), [async-std](https://docs.rs/async-std) and [smol](https://docs.rs/smol).
 //!
+//! Symbolic links are walked through but they are not followed.
+//!
 //! # Example
 //!
 //! Recursively traverse a directory:
