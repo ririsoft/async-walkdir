@@ -305,6 +305,21 @@ mod tests {
                 Err(e) => {
                     assert_eq!(wd.root, e.path().unwrap());
                     assert_eq!(e.io().unwrap().kind(), ErrorKind::NotFound);
+                    assert_eq!(e.into_io().unwrap().kind(), ErrorKind::NotFound);
+                }
+                _ => panic!("want IO error"),
+            }
+        })
+    }
+
+    #[test]
+    fn into_io_error() {
+        block_on(async {
+            let mut wd = WalkDir::new("foobar");
+            match wd.next().await.unwrap() {
+                Err(e) => {
+                    let e: std::io::Error = e.into();
+                    assert_eq!(e.kind(), ErrorKind::NotFound);
                 }
                 _ => panic!("want IO error"),
             }
