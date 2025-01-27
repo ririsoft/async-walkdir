@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 ### Security
 
+## [2.1.0] - 2025-01-27
+
+### Added
+
+- New `into_io` and `From<Error> for io::Error` methods.
+
 ## [2.0.0] - 2024-06-15
 
 ### Added
