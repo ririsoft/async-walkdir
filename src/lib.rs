@@ -84,6 +84,7 @@
 mod error;
 
 use std::future::Future;
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -112,11 +113,18 @@ type BoxStream = futures_lite::stream::Boxed<Result<DirEntry>>;
 /// # Panics
 ///
 /// Panics if the directories depth overflows `usize`.
-pub struct WalkDir {
+pub struct WalkDir<State = Unfiltered> {
     root: PathBuf,
     entries: BoxStream,
     opts: WalkDirOptions,
+    _state: PhantomData<State>,
 }
+
+/// A marker struct to signal, that the DirWalk is not being filtered
+pub struct Unfiltered;
+/// A marker struct to snignal, that the DirWalk has a filter applied.
+/// This results in some options not being configurable after this point anymore.
+pub struct Filtered;
 
 #[derive(Default, Clone, Copy)]
 struct WalkDirOptions {
@@ -146,9 +154,11 @@ impl WalkDir {
                 None::<Box<dyn FnMut(DirEntry) -> BoxedFut<Filtering> + Send>>,
             ),
             opts: WalkDirOptions::default(),
+            _state: PhantomData,
         }
     }
-
+}
+impl WalkDir<Unfiltered> {
     /// Yield the directory's content before the directory.
     ///
     /// When `yes` is false (the default), the directory is yielded before the contents are read.
@@ -168,25 +178,30 @@ impl WalkDir {
                 None::<Box<dyn FnMut(DirEntry) -> BoxedFut<Filtering> + Send>>,
             ),
             opts: self.opts,
+            _state: PhantomData,
         }
     }
 
     /// Filter entries.
-    pub fn filter<F, Fut>(self, f: F) -> Self
+    pub fn filter<F, Fut>(self, f: F) -> WalkDir<Filtered>
     where
         F: FnMut(DirEntry) -> Fut + Send + 'static,
         Fut: Future<Output = Filtering> + Send,
     {
         let root = self.root.clone();
-        Self {
+        WalkDir {
             root: self.root,
             entries: walk_dir(root, self.opts, Some(f)),
             opts: self.opts,
+            _state: PhantomData,
         }
     }
 }
 
-impl Stream for WalkDir {
+impl<State> Stream for WalkDir<State>
+where
+    State: Unpin,
+{
     type Item = Result<DirEntry>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
