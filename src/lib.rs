@@ -115,6 +115,12 @@ type BoxStream = futures_lite::stream::Boxed<Result<DirEntry>>;
 pub struct WalkDir {
     root: PathBuf,
     entries: BoxStream,
+    opts: WalkDirOptions,
+}
+
+#[derive(Default, Clone, Copy)]
+struct WalkDirOptions {
+    contents_first: bool,
 }
 
 /// Sets the filtering behavior.
@@ -136,8 +142,32 @@ impl WalkDir {
             root: root.as_ref().to_owned(),
             entries: walk_dir(
                 root,
+                WalkDirOptions::default(),
                 None::<Box<dyn FnMut(DirEntry) -> BoxedFut<Filtering> + Send>>,
             ),
+            opts: WalkDirOptions::default(),
+        }
+    }
+
+    /// Yield the directory's content before the directory.
+    ///
+    /// When `yes` is false (the default), the directory is yielded before the contents are read.
+    /// This is useful when e.g. you want to skip processing some of the directories.
+    ///
+    /// When `yes` is `true`, the iterator yields the contents of a directory
+    /// before yielding the directory itself. This is useful when, e.g. you
+    /// want to recursively delete a directory.
+    pub fn contents_first(mut self, yes: bool) -> Self {
+        let root = self.root.clone();
+        self.opts.contents_first = yes;
+        Self {
+            root: self.root,
+            entries: walk_dir(
+                root,
+                self.opts,
+                None::<Box<dyn FnMut(DirEntry) -> BoxedFut<Filtering> + Send>>,
+            ),
+            opts: self.opts,
         }
     }
 
@@ -150,7 +180,8 @@ impl WalkDir {
         let root = self.root.clone();
         Self {
             root: self.root,
-            entries: walk_dir(root, Some(f)),
+            entries: walk_dir(root, self.opts, Some(f)),
+            opts: self.opts,
         }
     }
 }
@@ -164,7 +195,20 @@ impl Stream for WalkDir {
     }
 }
 
-fn walk_dir<F, Fut>(root: impl AsRef<Path>, filter: Option<F>) -> BoxStream
+struct DirStackItem {
+    path: PathBuf,
+    read_dir: ReadDir,
+    // holds the directory, while it is being traversed
+    // only relevant when `contents_first` is set to true
+    deferred_entry: Option<DirEntry>,
+    // when `contents_first` is enabled, the file tree
+    // is traversed in post-order, so all non-directory
+    // contents of a directory need to be stored in here
+    // until the child directories are finished traversing
+    deferred_files: Vec<DirEntry>,
+}
+
+fn walk_dir<F, Fut>(root: impl AsRef<Path>, opts: WalkDirOptions, filter: Option<F>) -> BoxStream
 where
     F: FnMut(DirEntry) -> Fut + Send + 'static,
     Fut: Future<Output = Filtering> + Send,
@@ -178,9 +222,21 @@ where
                         Err(InnerError::Io { path: root, source }.into()),
                         State::Done,
                     )),
-                    Ok(rd) => walk(vec![(root, rd)], filter).await,
+                    Ok(rd) => {
+                        walk(
+                            vec![DirStackItem {
+                                path: root,
+                                read_dir: rd,
+                                deferred_files: Vec::new(),
+                                deferred_entry: None,
+                            }],
+                            filter,
+                            opts,
+                        )
+                        .await
+                    }
                 },
-                State::Walk((dirs, filter)) => walk(dirs, filter).await,
+                State::Walk((dirs, filter)) => walk(dirs, filter, opts).await,
                 State::Done => None,
             }
         },
@@ -190,7 +246,7 @@ where
 
 enum State<F> {
     Start((PathBuf, Option<F>)),
-    Walk((Vec<(PathBuf, ReadDir)>, Option<F>)),
+    Walk((Vec<DirStackItem>, Option<F>)),
     Done,
 }
 
@@ -198,41 +254,106 @@ type UnfoldState<F> = (Result<DirEntry>, State<F>);
 
 // Iterative on purpose: filtered-out entries must not grow the stack (see issue #13).
 async fn walk<F, Fut>(
-    mut dirs: Vec<(PathBuf, ReadDir)>,
+    mut dirs: Vec<DirStackItem>,
     mut filter: Option<F>,
+    opts: WalkDirOptions,
 ) -> Option<UnfoldState<F>>
 where
     F: FnMut(DirEntry) -> Fut + Send + 'static,
     Fut: Future<Output = Filtering> + Send,
 {
     loop {
-        let (path, dir) = dirs.last_mut()?;
-        let entry = match dir.next().await {
+        let res = {
+            let item = dirs.last_mut()?;
+            item.read_dir.next().await
+        };
+
+        let entry = match res {
             Some(Ok(entry)) => entry,
-            Some(Err(source)) => return io_error(path.to_path_buf(), source, dirs, filter),
+            Some(Err(source)) => {
+                let path = dirs.last().unwrap().path.clone();
+                return io_error(path, source, dirs, filter);
+            }
             None => {
-                dirs.pop();
-                continue;
+                let Some(mut popped) = dirs.pop() else {
+                    unreachable!()
+                };
+                if let Some(deferred_file) = popped.deferred_files.pop() {
+                    dirs.push(popped);
+                    return Some((Ok(deferred_file), State::Walk((dirs, filter))));
+                } else if let Some(deferred_dir) = popped.deferred_entry.take() {
+                    return Some((Ok(deferred_dir), State::Walk((dirs, filter))));
+                } else {
+                    continue;
+                }
             }
         };
+
         let ft = match entry.file_type().await {
             Ok(ft) => ft,
             Err(source) => return io_error(entry.path(), source, dirs, filter),
         };
+
         let filtering = match filter.as_mut() {
             Some(filter) => filter(entry.clone()).await,
             None => Filtering::Continue,
         };
-        if ft.is_dir() && filtering != Filtering::IgnoreDir {
-            let path = entry.path();
-            let rd = match read_dir(&path).await {
-                Ok(rd) => rd,
-                Err(source) => return io_error(path, source, dirs, filter),
-            };
-            dirs.push((path, rd));
-        }
-        if filtering == Filtering::Continue {
-            return Some((Ok(entry), State::Walk((dirs, filter))));
+
+        match filtering {
+            Filtering::IgnoreDir => continue,
+            Filtering::Ignore => {
+                if ft.is_dir() {
+                    let path = entry.path();
+                    let rd = match read_dir(&path).await {
+                        Ok(rd) => rd,
+                        Err(source) => return io_error(path, source, dirs, filter),
+                    };
+                    dirs.push(DirStackItem {
+                        path,
+                        read_dir: rd,
+                        deferred_entry: None,
+                        deferred_files: Vec::new(),
+                    });
+                }
+                continue;
+            }
+            Filtering::Continue => {
+                if ft.is_dir() {
+                    let path = entry.path();
+                    let rd = match read_dir(&path).await {
+                        Ok(rd) => rd,
+                        Err(source) => return io_error(path, source, dirs, filter),
+                    };
+
+                    let deferred_entry = if opts.contents_first {
+                        Some(entry.clone())
+                    } else {
+                        None
+                    };
+
+                    dirs.push(DirStackItem {
+                        path,
+                        read_dir: rd,
+                        deferred_entry,
+                        deferred_files: Vec::new(),
+                    });
+
+                    if opts.contents_first {
+                        continue;
+                    } else {
+                        return Some((Ok(entry), State::Walk((dirs, filter))));
+                    }
+                } else {
+                    if opts.contents_first {
+                        if let Some(last) = dirs.last_mut() {
+                            last.deferred_files.push(entry);
+                        }
+                        continue;
+                    } else {
+                        return Some((Ok(entry), State::Walk((dirs, filter))));
+                    }
+                }
+            }
         }
     }
 }
@@ -240,7 +361,7 @@ where
 fn io_error<F>(
     path: PathBuf,
     source: std::io::Error,
-    dirs: Vec<(PathBuf, ReadDir)>,
+    dirs: Vec<DirStackItem>,
     filter: Option<F>,
 ) -> Option<UnfoldState<F>> {
     let err = InnerError::Io { path, source }.into();
@@ -385,6 +506,40 @@ mod tests {
                 got.push(entry.path());
             }
             got.sort();
+            assert_eq!(got, want);
+
+            Ok(())
+        })
+    }
+    #[test]
+    fn contents_first() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            let f1 = root.path().join("f1.txt");
+            let d1 = root.path().join("d1");
+            let f2 = d1.join("f2.txt");
+            let d2 = d1.join("d2");
+            let f3 = d2.join("f3.txt");
+
+            async_fs::create_dir_all(&d2).await?;
+            async_fs::write(&f1, []).await?;
+            async_fs::write(&f2, []).await?;
+            async_fs::write(&f3, []).await?;
+
+            let want = vec![
+                f3.to_owned(),
+                d2.to_owned(),
+                f2.to_owned(),
+                d1.to_owned(),
+                f1.to_owned(),
+            ];
+            let mut wd = WalkDir::new(root.path()).contents_first(true);
+
+            let mut got = Vec::new();
+            while let Some(entry) = wd.next().await {
+                let entry = entry.unwrap();
+                got.push(entry.path());
+            }
             assert_eq!(got, want);
 
             Ok(())
