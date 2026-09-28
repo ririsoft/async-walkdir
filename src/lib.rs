@@ -90,7 +90,6 @@ use std::task::{Context, Poll};
 
 use async_fs::{read_dir, ReadDir};
 use futures_lite::future::Boxed as BoxedFut;
-use futures_lite::future::FutureExt;
 use futures_lite::stream::{self, Stream, StreamExt};
 
 #[doc(no_inline)]
@@ -197,85 +196,67 @@ enum State<F> {
 
 type UnfoldState<F> = (Result<DirEntry>, State<F>);
 
-fn walk<F, Fut>(
+// Iterative on purpose: filtered-out entries must not grow the stack (see issue #13).
+async fn walk<F, Fut>(
     mut dirs: Vec<(PathBuf, ReadDir)>,
-    filter: Option<F>,
-) -> BoxedFut<Option<UnfoldState<F>>>
+    mut filter: Option<F>,
+) -> Option<UnfoldState<F>>
 where
     F: FnMut(DirEntry) -> Fut + Send + 'static,
     Fut: Future<Output = Filtering> + Send,
 {
-    async move {
-        if let Some((path, dir)) = dirs.last_mut() {
-            match dir.next().await {
-                Some(Ok(entry)) => walk_entry(entry, dirs, filter).await,
-                Some(Err(source)) => Some((
+    loop {
+        let (path, dir) = dirs.last_mut()?;
+        let entry = match dir.next().await {
+            Some(Ok(entry)) => entry,
+            Some(Err(source)) => {
+                let path = path.to_path_buf();
+                return Some((
+                    Err(InnerError::Io { path, source }.into()),
+                    State::Walk((dirs, filter)),
+                ));
+            }
+            None => {
+                dirs.pop();
+                continue;
+            }
+        };
+        let ft = match entry.file_type().await {
+            Ok(ft) => ft,
+            Err(source) => {
+                return Some((
                     Err(InnerError::Io {
-                        path: path.to_path_buf(),
+                        path: entry.path(),
                         source,
                     }
                     .into()),
                     State::Walk((dirs, filter)),
-                )),
-                None => {
-                    dirs.pop();
-                    walk(dirs, filter).await
-                }
+                ))
             }
-        } else {
-            None
-        }
-    }
-    .boxed()
-}
-
-fn walk_entry<F, Fut>(
-    entry: DirEntry,
-    mut dirs: Vec<(PathBuf, ReadDir)>,
-    mut filter: Option<F>,
-) -> BoxedFut<Option<UnfoldState<F>>>
-where
-    F: FnMut(DirEntry) -> Fut + Send + 'static,
-    Fut: Future<Output = Filtering> + Send,
-{
-    async move {
-        match entry.file_type().await {
-            Err(source) => Some((
-                Err(InnerError::Io {
-                    path: entry.path(),
-                    source,
+        };
+        let filtering = match filter.as_mut() {
+            Some(filter) => filter(entry.clone()).await,
+            None => Filtering::Continue,
+        };
+        if ft.is_dir() {
+            let path = entry.path();
+            let rd = match read_dir(&path).await {
+                Ok(rd) => rd,
+                Err(source) => {
+                    return Some((
+                        Err(InnerError::Io { path, source }.into()),
+                        State::Walk((dirs, filter)),
+                    ))
                 }
-                .into()),
-                State::Walk((dirs, filter)),
-            )),
-            Ok(ft) => {
-                let filtering = match filter.as_mut() {
-                    Some(filter) => filter(entry.clone()).await,
-                    None => Filtering::Continue,
-                };
-                if ft.is_dir() {
-                    let path = entry.path();
-                    let rd = match read_dir(&path).await {
-                        Err(source) => {
-                            return Some((
-                                Err(InnerError::Io { path, source }.into()),
-                                State::Walk((dirs, filter)),
-                            ))
-                        }
-                        Ok(rd) => rd,
-                    };
-                    if filtering != Filtering::IgnoreDir {
-                        dirs.push((path, rd));
-                    }
-                }
-                match filtering {
-                    Filtering::Continue => Some((Ok(entry), State::Walk((dirs, filter)))),
-                    Filtering::IgnoreDir | Filtering::Ignore => walk(dirs, filter).await,
-                }
+            };
+            if filtering != Filtering::IgnoreDir {
+                dirs.push((path, rd));
             }
         }
+        if filtering == Filtering::Continue {
+            return Some((Ok(entry), State::Walk((dirs, filter))));
+        }
     }
-    .boxed()
 }
 
 #[cfg(test)]
