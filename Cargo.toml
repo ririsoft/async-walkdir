@@ -1,6 +1,6 @@
 [package]
 name = "async-walkdir"
-version = "2.1.0"
+version = "2.2.0"
 authors = ["Ririsoft <riri@ririsoft.com>"]
 edition = "2021"
 description = "Asynchronous directory traversal for Rust."
@@ -14,10 +14,10 @@ exclude = [ "/.github/*" ]
 readme = "README.md"
 
 [dependencies]
-futures-lite = "2.1"
-async-fs = "2.1"
+futures-lite = "2.6"
+async-fs = "2.2"
 thiserror = "2.0"
 
 [dev-dependencies]
-tempfile = "3.15"
-tokio = { version = "1.53.1", features = ["rt-multi-thread"] }
+tempfile = "3.27"
+tokio = { version = "1.53", features = ["rt-multi-thread"] }
