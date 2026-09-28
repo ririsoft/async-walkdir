@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 ### Security
 
+- Hardened CI/CD supply chain: GitHub Actions pinned to commit SHAs, least-privilege
+  workflow permissions, crates.io trusted publishing (OIDC) from a protected `release`
+  environment, Dependabot security updates, and actionlint/zizmor workflow linting.
+
 ## [2.2.0] - 2026-09-28
 
 ### Fixed
