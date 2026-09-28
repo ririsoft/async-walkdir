@@ -209,13 +209,7 @@ where
         let (path, dir) = dirs.last_mut()?;
         let entry = match dir.next().await {
             Some(Ok(entry)) => entry,
-            Some(Err(source)) => {
-                let path = path.to_path_buf();
-                return Some((
-                    Err(InnerError::Io { path, source }.into()),
-                    State::Walk((dirs, filter)),
-                ));
-            }
+            Some(Err(source)) => return io_error(path.to_path_buf(), source, dirs, filter),
             None => {
                 dirs.pop();
                 continue;
@@ -223,16 +217,7 @@ where
         };
         let ft = match entry.file_type().await {
             Ok(ft) => ft,
-            Err(source) => {
-                return Some((
-                    Err(InnerError::Io {
-                        path: entry.path(),
-                        source,
-                    }
-                    .into()),
-                    State::Walk((dirs, filter)),
-                ))
-            }
+            Err(source) => return io_error(entry.path(), source, dirs, filter),
         };
         let filtering = match filter.as_mut() {
             Some(filter) => filter(entry.clone()).await,
@@ -242,12 +227,7 @@ where
             let path = entry.path();
             let rd = match read_dir(&path).await {
                 Ok(rd) => rd,
-                Err(source) => {
-                    return Some((
-                        Err(InnerError::Io { path, source }.into()),
-                        State::Walk((dirs, filter)),
-                    ))
-                }
+                Err(source) => return io_error(path, source, dirs, filter),
             };
             dirs.push((path, rd));
         }
@@ -255,6 +235,16 @@ where
             return Some((Ok(entry), State::Walk((dirs, filter))));
         }
     }
+}
+
+fn io_error<F>(
+    path: PathBuf,
+    source: std::io::Error,
+    dirs: Vec<(PathBuf, ReadDir)>,
+    filter: Option<F>,
+) -> Option<UnfoldState<F>> {
+    let err = InnerError::Io { path, source }.into();
+    Some((Err(err), State::Walk((dirs, filter))))
 }
 
 #[cfg(test)]
@@ -288,6 +278,30 @@ mod tests {
                 }
                 _ => panic!("want IO error"),
             }
+            assert!(wd.next().await.is_none());
+        })
+    }
+
+    #[test]
+    fn walk_dir_read_dir_error() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            let d1 = root.path().join("d1");
+            async_fs::create_dir_all(&d1).await?;
+            // Removing the directory from the filter makes the subsequent read_dir fail.
+            let mut wd = WalkDir::new(root.path()).filter(|entry| async move {
+                async_fs::remove_dir(entry.path()).await.unwrap();
+                Filtering::Continue
+            });
+            match wd.next().await.unwrap() {
+                Err(e) => {
+                    assert_eq!(e.path().unwrap(), d1.as_path());
+                    assert_eq!(e.io().unwrap().kind(), ErrorKind::NotFound);
+                }
+                _ => panic!("want IO error"),
+            }
+            assert!(wd.next().await.is_none());
+            Ok(())
         })
     }
 
