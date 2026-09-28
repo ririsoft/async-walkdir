@@ -238,7 +238,7 @@ where
             Some(filter) => filter(entry.clone()).await,
             None => Filtering::Continue,
         };
-        if ft.is_dir() {
+        if ft.is_dir() && filtering != Filtering::IgnoreDir {
             let path = entry.path();
             let rd = match read_dir(&path).await {
                 Ok(rd) => rd,
@@ -249,9 +249,7 @@ where
                     ))
                 }
             };
-            if filtering != Filtering::IgnoreDir {
-                dirs.push((path, rd));
-            }
+            dirs.push((path, rd));
         }
         if filtering == Filtering::Continue {
             return Some((Ok(entry), State::Walk((dirs, filter))));
@@ -428,7 +426,23 @@ mod test_unix {
     use futures_lite::future::block_on;
     use futures_lite::stream::StreamExt;
 
-    use super::WalkDir;
+    use super::{Filtering, WalkDir};
+
+    #[test]
+    fn filter_ignore_dir_does_not_read_it() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            let d1 = root.path().join("d1");
+            async_fs::create_dir_all(&d1).await?;
+            let mut perms = async_fs::metadata(&d1).await?.permissions();
+            perms.set_mode(0o222);
+            async_fs::set_permissions(&d1, perms).await?;
+            let mut wd = WalkDir::new(&root).filter(|_| async { Filtering::IgnoreDir });
+            assert!(wd.next().await.is_none());
+            Ok(())
+        })
+    }
+
     #[test]
     fn walk_dir_error_path() -> Result<()> {
         block_on(async {

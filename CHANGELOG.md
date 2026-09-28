@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Stack overflow when filtering out many entries, e.g. on tokio worker threads (#13).
+- Directories filtered with `Filtering::IgnoreDir` are no longer read, so they
+  no longer produce IO errors (e.g. permission denied).
 
 ### Changed
 ### Deprecated
