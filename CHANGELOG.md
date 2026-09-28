@@ -8,15 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 ### Fixed
-
-- Stack overflow when filtering out many entries, e.g. on tokio worker threads (#13).
-- Directories filtered with `Filtering::IgnoreDir` are no longer read, so they
-  no longer produce IO errors (e.g. permission denied).
-
 ### Changed
 ### Deprecated
 ### Removed
 ### Security
+
+## [2.2.0] - 2026-09-28
+
+### Fixed
+
+- Stack overflow when filtering out many entries, e.g. on tokio worker threads (#13).
+
+### Changed
+
+- Directories filtered with `Filtering::IgnoreDir` are no longer read, so they
+  no longer produce IO errors (e.g. permission denied).
+- Update dependencies: `futures-lite` 2.6, `async-fs` 2.2.
 
 ## [2.1.0] - 2025-01-27
 
