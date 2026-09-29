@@ -187,6 +187,19 @@ fn entry_outlives_walker() -> Result<()> {
     })
 }
 
+#[test]
+fn walker_is_send() {
+    fn assert_send<T: Send>(_: T) {}
+    let wd = WalkDir::new("foo");
+    assert_send(async move {
+        let mut wd = wd;
+        if let Some(Ok(entry)) = wd.next().await {
+            let _ = entry.metadata().await;
+            let _ = entry.open().await;
+        }
+    });
+}
+
 #[cfg(unix)]
 mod unix {
     use std::io::Result;
@@ -194,7 +207,6 @@ mod unix {
 
     use futures_lite::future::block_on;
     use futures_lite::io::AsyncReadExt;
-    use futures_lite::stream::StreamExt;
     use rustix::fs::{Mode, OFlags};
 
     use super::{collect, find, make_tree};
@@ -376,17 +388,171 @@ mod unix {
             Ok(())
         })
     }
+}
+
+#[cfg(windows)]
+mod windows {
+    use std::io::{Error, Result};
+    use std::path::Path;
+    use std::process::Command;
+
+    use futures_lite::future::block_on;
+
+    use super::{collect, find, make_tree};
+    use crate::secure::{MetadataExt, WalkDir};
+    use crate::Filtering;
+
+    /// Creates a directory junction, which unlike symbolic links requires no
+    /// privilege.
+    fn junction(link: &Path, target: &Path) -> Result<()> {
+        let status = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .status()?;
+        if !status.success() {
+            return Err(Error::other(format!("mklink /J failed: {status}")));
+        }
+        Ok(())
+    }
 
     #[test]
-    fn walker_is_send() {
-        fn assert_send<T: Send>(_: T) {}
-        let wd = WalkDir::new("foo");
-        assert_send(async move {
-            let mut wd = wd;
-            if let Some(Ok(entry)) = wd.next().await {
-                let _ = entry.metadata().await;
-                let _ = entry.open().await;
+    fn junction_is_not_followed() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            let outside = tempfile::tempdir()?;
+            async_fs::write(outside.path().join("secret"), "secret").await?;
+            let link = root.path().join("link");
+            junction(&link, outside.path())?;
+
+            let (got, errors) = collect(WalkDir::new(root.path())).await;
+            assert_eq!(got, vec![link.clone()]);
+            assert!(errors.is_empty());
+
+            let entry = find(root.path(), &link).await;
+            assert!(entry.file_type().await?.is_symlink());
+            assert!(entry.metadata().await?.is_symlink());
+            assert!(entry.open().await.is_err());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn symlink_is_not_followed() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            let outside = tempfile::tempdir()?;
+            async_fs::write(outside.path().join("secret"), "secret").await?;
+            let link = root.path().join("link");
+            match std::os::windows::fs::symlink_dir(outside.path(), &link) {
+                // ERROR_PRIVILEGE_NOT_HELD: symbolic links require the
+                // developer mode or an elevated process.
+                Err(e) if e.raw_os_error() == Some(1314) => return Ok(()),
+                r => r?,
             }
-        });
+            let (got, errors) = collect(WalkDir::new(root.path())).await;
+            assert_eq!(got, vec![link]);
+            assert!(errors.is_empty());
+            Ok(())
+        })
+    }
+
+    /// A directory swapped for a junction after being listed and before
+    /// being opened: the walker must report it and not descend into it.
+    #[test]
+    fn swapped_dir_is_not_followed() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            let outside = tempfile::tempdir()?;
+            async_fs::write(outside.path().join("secret"), "secret").await?;
+            let d1 = root.path().join("d1");
+            async_fs::create_dir(&d1).await?;
+
+            // The filter runs between the listing of `root` and the opening of `d1`.
+            let target = outside.path().to_owned();
+            let wd = WalkDir::new(root.path()).filter(move |entry| {
+                let target = target.clone();
+                async move {
+                    std::fs::remove_dir(entry.path()).unwrap();
+                    junction(&entry.path(), &target).unwrap();
+                    Filtering::Continue
+                }
+            });
+            let (got, errors) = collect(wd).await;
+            assert!(got.is_empty(), "walk escaped the root: {got:?}");
+            assert_eq!(errors, vec![d1]);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn open_dir_is_refused() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            make_tree(root.path()).await?;
+            let entry = find(root.path(), &root.path().join("d1")).await;
+            assert!(entry.open().await.is_err());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn parent_handle_and_metadata_ext() -> Result<()> {
+        block_on(async {
+            // `FILE_ATTRIBUTE_READONLY`.
+            const READONLY: u32 = 0x1;
+
+            let root = tempfile::tempdir()?;
+            make_tree(root.path()).await?;
+            let path = root.path().join("f1.txt");
+            let mut perms = std::fs::metadata(&path)?.permissions();
+            perms.set_readonly(true);
+            std::fs::set_permissions(&path, perms)?;
+
+            let entry = find(root.path(), &path).await;
+            let md = entry.metadata().await?;
+            assert!(md.readonly());
+            assert_ne!(md.file_attributes() & READONLY, 0);
+            assert_ne!(md.file_index(), 0);
+
+            let parent = std::fs::File::from(entry.parent_handle().try_clone_to_owned()?);
+            assert!(parent.metadata()?.is_dir());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn from_handle_yields_relative_paths() -> Result<()> {
+        use std::os::windows::fs::OpenOptionsExt;
+        // `FILE_FLAG_BACKUP_SEMANTICS`, required to open a directory.
+        const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            make_tree(root.path()).await?;
+            let dir = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(BACKUP_SEMANTICS)
+                .open(root.path())?;
+            let (got, errors) = collect(WalkDir::from_handle(dir.into())).await;
+            assert!(errors.is_empty());
+            assert!(got.contains(&"f1.txt".into()));
+            assert!(got.contains(&Path::new("d1").join("d2").join("f3.txt")));
+            assert_eq!(got.len(), 5);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn root_file_is_refused() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            make_tree(root.path()).await?;
+            let file = root.path().join("f1.txt");
+            let (got, errors) = collect(WalkDir::new(&file)).await;
+            assert!(got.is_empty());
+            assert_eq!(errors, vec![file]);
+            Ok(())
+        })
     }
 }

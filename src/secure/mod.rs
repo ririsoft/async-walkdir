@@ -11,11 +11,12 @@
 //!
 //! - the root directory is opened once, then every child directory is opened
 //!   *relative to its already opened parent* with symlink following disabled
-//!   (`openat(2)` with `O_NOFOLLOW` on Unix);
+//!   (`openat(2)` with `O_NOFOLLOW` on Unix, `NtCreateFile` with a root
+//!   directory handle and `FILE_OPEN_REPARSE_POINT` on Windows);
 //! - metadata is read relative to the parent directory handle, without
 //!   following symbolic links;
-//! - a directory swapped for a symbolic link between the listing and the
-//!   opening is detected: the walker yields an error for that entry, does not
+//! - a directory swapped for a symbolic link (or a junction on Windows)
+//!   between the listing and the opening is detected: the walker yields an error for that entry, does not
 //!   descend into it, and continues with the next entries;
 //! - swapping or moving a *parent* directory has no effect: the walker keeps
 //!   reading the directories it has opened, wherever they are moved.
@@ -28,13 +29,16 @@
 //! # Limitations
 //!
 //! - The root path given to [`WalkDir::new`] is resolved once, following
-//!   symbolic links: it must be trusted. Use [`WalkDir::from_fd`] to start
-//!   from a directory handle you already hold.
+//!   symbolic links: it must be trusted. Use `WalkDir::from_fd` (Unix) or
+//!   `WalkDir::from_handle` (Windows) to start from a directory handle you
+//!   already hold.
 //! - [`DirEntry::path`] is informational: it is the path the entry had when
 //!   it was listed. Acting on it resolves it again and is subject to races.
-//! - Each directory currently being walked keeps two file descriptors open,
-//!   and each yielded [`DirEntry`] keeps its parent directory open until it
-//!   is dropped.
+//! - Each directory currently being walked keeps two handles open, and each
+//!   yielded [`DirEntry`] keeps its parent directory open until it is
+//!   dropped.
+//! - On Windows, [`DirEntry::metadata`] returns the metadata found while
+//!   listing the parent directory, like [`std::fs::DirEntry::metadata`].
 //!
 //! # Example
 //!
@@ -84,9 +88,14 @@ use crate::{Filtering, Result};
 
 #[cfg(unix)]
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+#[cfg(windows)]
+use std::os::windows::io::{AsHandle, BorrowedHandle, OwnedHandle};
 
 #[cfg(unix)]
 #[path = "unix.rs"]
+mod sys;
+#[cfg(windows)]
+#[path = "windows.rs"]
 mod sys;
 
 #[cfg(test)]
@@ -130,6 +139,17 @@ impl WalkDir {
     /// relative to `dir`, for instance `sub/file.txt`.
     #[cfg(unix)]
     pub fn from_fd(dir: OwnedFd) -> Self {
+        Self::with_root(Root::Handle(Arc::new(dir)))
+    }
+
+    /// Returns a new `WalkDir` starting at the already opened directory `dir`.
+    ///
+    /// No path is resolved at all. The paths of the yielded entries are
+    /// relative to `dir`, for instance `sub\file.txt`. The handle must have
+    /// been opened with the `FILE_LIST_DIRECTORY` access right, for instance
+    /// with [`std::fs::OpenOptions`] and `FILE_FLAG_BACKUP_SEMANTICS`.
+    #[cfg(windows)]
+    pub fn from_handle(dir: OwnedHandle) -> Self {
         Self::with_root(Root::Handle(Arc::new(dir)))
     }
 
@@ -249,6 +269,17 @@ impl DirEntry {
     #[cfg(unix)]
     pub fn parent_fd(&self) -> BorrowedFd<'_> {
         self.parent.as_fd()
+    }
+
+    /// Returns the handle of the parent directory of this entry.
+    ///
+    /// Combined with [`DirEntry::file_name`], it allows acting on the entry
+    /// with `NtCreateFile` and a root directory handle, without resolving its
+    /// path again. The handle is opened with the `FILE_LIST_DIRECTORY`,
+    /// `FILE_READ_ATTRIBUTES` and `SYNCHRONIZE` access rights.
+    #[cfg(windows)]
+    pub fn parent_handle(&self) -> BorrowedHandle<'_> {
+        self.parent.as_handle()
     }
 }
 
@@ -408,6 +439,27 @@ impl MetadataExt for Metadata {
     }
     fn gid(&self) -> u32 {
         self.0.gid
+    }
+}
+
+/// Windows specific extensions to [`Metadata`].
+///
+/// This trait is sealed and cannot be implemented outside of this crate.
+#[cfg(windows)]
+pub trait MetadataExt: sealed::Sealed {
+    /// Returns the file attributes (`FILE_ATTRIBUTE_*` flags).
+    fn file_attributes(&self) -> u32;
+    /// Returns the file index (file ID) identifying the file on its volume.
+    fn file_index(&self) -> u64;
+}
+
+#[cfg(windows)]
+impl MetadataExt for Metadata {
+    fn file_attributes(&self) -> u32 {
+        self.0.attributes
+    }
+    fn file_index(&self) -> u64 {
+        self.0.file_index
     }
 }
 
