@@ -82,8 +82,90 @@ the walk is **not** affected.
   resolved again by every subsequent file system call. Re-validate with
   `std::fs::symlink_metadata` right before acting and treat any unexpected change as an
   error, keeping in mind that this only narrows the window.
-- Robust protection requires walking with directory handles (`openat` on Unix,
-  relative `NtCreateFile` on Windows) instead of paths.
+- Use the `secure` walker described below, which is not affected by this race.
+
+## The `secure` walker
+
+> **Experimental:** the `secure` walker is new and looking for feedback. Its API may still
+> change, including in minor releases, until it is declared stable. Please share your use
+> cases, problems and suggestions by [opening an issue][10].
+
+The opt-in `secure` Cargo feature provides `async_walkdir::secure::WalkDir`, available on
+Unix and Windows. It walks the tree with directory handles instead of paths, the same
+technique used by `std` to fix [CVE-2022-21658][8]:
+
+- every directory is opened *relative to its already opened parent*, by a single name,
+  without following symlinks (`openat` with `O_NOFOLLOW` on Unix, `NtCreateFile` with a
+  root directory handle and `FILE_OPEN_REPARSE_POINT` on Windows);
+- a directory swapped for a symlink (or a junction) after being listed is detected: the
+  walker yields an error for it, does not descend into it, and continues the walk;
+- replacing a parent directory has no effect, since the walker only uses the handle it
+  has already opened.
+
+```toml
+[dependencies]
+async-walkdir = { version = "2", features = ["secure"] }
+```
+
+```rust
+use async_walkdir::secure::WalkDir;
+use futures_lite::future::block_on;
+use futures_lite::io::AsyncReadExt;
+use futures_lite::stream::StreamExt;
+
+block_on(async {
+    let mut entries = WalkDir::new("my_directory");
+    while let Some(entry) = entries.next().await {
+        let entry = entry?;
+        if entry.file_type().await?.is_file() {
+            // Opened relative to the parent directory handle, never following symlinks.
+            let mut content = Vec::new();
+            entry.open().await?.read_to_end(&mut content).await?;
+        }
+    }
+    Ok::<_, Box<dyn std::error::Error>>(())
+});
+```
+
+Entries also give access to their parent directory handle (`parent_fd` on Unix,
+`parent_handle` on Windows), to act on them with other `*at` system calls instead of their
+path. The walker's guarantees do not extend to what you do with these handles: resolving
+`..` or a name made of several path components relative to them can leave the walked tree.
+
+### Migrating from `WalkDir`
+
+The `secure` walker is a separate type: `async_walkdir::WalkDir` is unchanged.
+
+| `async_walkdir`               | `async_walkdir::secure`                                      |
+|-------------------------------|--------------------------------------------------------------|
+| `WalkDir::new(root)`          | `WalkDir::new(root)`, or `WalkDir::from_fd` / `from_handle`  |
+| `WalkDir::filter(f)`          | `WalkDir::filter(f)`, with the same `Filtering` values       |
+| `DirEntry::path()`            | `DirEntry::path()`, for display only: acting on it is racy   |
+| `DirEntry::file_name()`       | `DirEntry::file_name()`                                      |
+| `DirEntry::file_type()`       | `DirEntry::file_type()`, returning `secure::FileType`        |
+| `DirEntry::metadata()` (follows symlinks) | `DirEntry::metadata()`, returning `secure::Metadata`, never following symlinks |
+| `async_fs::File::open(entry.path())` | `DirEntry::open()`                                    |
+
+Limitations:
+
+- The root directory itself is resolved by path, following symlinks: it must be trusted.
+  Use `WalkDir::from_fd` (Unix) or `WalkDir::from_handle` (Windows) to start from a handle.
+- Paths of yielded entries are the ones seen when their parent was listed. Once the walk
+  moves on, the tree may change: use `DirEntry::open` or the parent handle, not the path.
+- Each directory being walked keeps two handles open, and each yielded entry keeps its
+  parent directory open until it is dropped. Collecting all the entries of a large tree
+  therefore keeps one handle per directory open and may exceed the limit of open files of
+  the process (`ulimit -n` on Unix): process entries as they are yielded and drop them.
+
+### Evolution with the standard library
+
+The standard library does not expose directory handle APIs yet, so the `secure` walker
+relies on [rustix][11] on Unix and on Windows APIs called through [windows-sys][12], which
+requires `unsafe` code. Directory handles are being added to `std`
+([rust-lang/rust#120426][13]). The `secure` walker will evolve along with them: its
+implementation will move to `std` once they are stable, dropping these dependencies and the
+`unsafe` code, and its API may be aligned with the `std` one. No `rustix` or `windows-sys`
+type is exposed in its API, so that this move does not break your code.
 
 [1]: https://docs.rs/walkdir
 [2]: https://docs.rs/async-fs
@@ -94,3 +176,7 @@ the walk is **not** affected.
 [7]: https://docs.rs/smol
 [8]: https://blog.rust-lang.org/2022/01/20/cve-2022-21658.html
 [9]: https://github.com/BurntSushi/walkdir/issues/209
+[10]: https://github.com/ririsoft/async-walkdir/issues
+[11]: https://docs.rs/rustix
+[12]: https://docs.rs/windows-sys
+[13]: https://github.com/rust-lang/rust/issues/120426

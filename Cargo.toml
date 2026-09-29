@@ -14,7 +14,7 @@ exclude = [ "/.github/*" ]
 readme = "README.md"
 
 [features]
-# Walker resistant to symlink races, see the `secure` module (Unix and Windows).
+# Experimental walker resistant to symlink races, see the `secure` module (Unix and Windows).
 secure = ["dep:blocking", "dep:rustix", "dep:windows-sys"]
 
 [dependencies]

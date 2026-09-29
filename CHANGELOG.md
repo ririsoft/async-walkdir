@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+- Experimental `secure` Cargo feature (Unix and Windows) providing `async_walkdir::secure::WalkDir`, a
+  walker based on directory handles that is not affected by the symlink TOCTOU race of
+  `WalkDir`. Its API may still change until it is declared stable, and its implementation
+  will move to `std` directory handles once available (rust-lang/rust#120426). Feedback is
+  welcome. See the README "The `secure` walker" section.
+
 ### Fixed
 ### Changed
 ### Deprecated
@@ -15,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Documented a TOCTOU race: a concurrent process able to modify the walked tree can swap
   a directory for a symlink between the type check and the directory read, making the
-  walk escape the root directory. See the README "Security" section.
+  walk escape the root directory. See the README "Security" section, and the new `secure`
+  walker which is not affected.
 - Hardened CI/CD supply chain: GitHub Actions pinned to commit SHAs, least-privilege
   workflow permissions, crates.io trusted publishing (OIDC) from a protected `release`
   environment, Dependabot security updates, and actionlint/zizmor workflow linting.

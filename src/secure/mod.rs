@@ -1,6 +1,12 @@
 //! A directory walker that never follows symbolic links, even when the
 //! tree is modified concurrently.
 //!
+//! **Experimental:** this module is new and looking for feedback. Its API may
+//! still change, including in minor releases, until it is declared stable.
+//! Please share your use cases, problems and suggestions by
+//! [opening an issue](https://github.com/ririsoft/async-walkdir/issues) on
+//! GitHub.
+//!
 //! [`crate::WalkDir`] checks each entry, then opens directories again by
 //! path. A concurrent process can swap a directory for a symbolic link
 //! between those two steps and make the walk escape the root directory
@@ -36,9 +42,26 @@
 //!   it was listed. Acting on it resolves it again and is subject to races.
 //! - Each directory currently being walked keeps two handles open, and each
 //!   yielded [`DirEntry`] keeps its parent directory open until it is
-//!   dropped.
+//!   dropped. Collecting all the entries of a large tree therefore keeps one
+//!   handle per directory open and may exceed the limit of open files of the
+//!   process (`ulimit -n` on Unix): process entries as they are yielded and
+//!   drop them.
 //! - On Windows, [`DirEntry::metadata`] returns the metadata found while
 //!   listing the parent directory, like [`std::fs::DirEntry::metadata`].
+//!
+//! # Evolution with the standard library
+//!
+//! The standard library does not expose directory handle APIs yet: this
+//! module relies on `rustix` on Unix and on Windows APIs called through
+//! `windows-sys`, which requires `unsafe` code. Directory handles are being
+//! added to `std` ([rust-lang/rust#120426]). This module will evolve along
+//! with them: its implementation will move to `std` once they are stable,
+//! dropping the platform specific dependencies and the `unsafe` code, and
+//! its API may be aligned with the `std` one. No `rustix` or `windows-sys`
+//! type is exposed, so that the implementation can change without breaking
+//! your code.
+//!
+//! [rust-lang/rust#120426]: https://github.com/rust-lang/rust/issues/120426
 //!
 //! # Example
 //!
@@ -110,7 +133,7 @@ type BoxStream = futures_lite::stream::Boxed<Result<DirEntry>>;
 /// directory without ever following symbolic links.
 ///
 /// This is the race-free counterpart of [`crate::WalkDir`], with the same
-/// behavior otherwise: entries are returned without a specific ordering, the
+/// traversal and filtering behavior: entries are returned without a specific ordering, the
 /// root directory itself is not returned, and IO errors are yielded without
 /// stopping the walk.
 pub struct WalkDir {
@@ -136,7 +159,8 @@ impl WalkDir {
     /// Returns a new `WalkDir` starting at the already opened directory `dir`.
     ///
     /// No path is resolved at all. The paths of the yielded entries are
-    /// relative to `dir`, for instance `sub/file.txt`.
+    /// relative to `dir`, for instance `sub/file.txt`, and an error about
+    /// `dir` itself, for instance if it is not a directory, has an empty path.
     #[cfg(unix)]
     pub fn from_fd(dir: OwnedFd) -> Self {
         Self::with_root(Root::Handle(Arc::new(dir)))
@@ -145,7 +169,9 @@ impl WalkDir {
     /// Returns a new `WalkDir` starting at the already opened directory `dir`.
     ///
     /// No path is resolved at all. The paths of the yielded entries are
-    /// relative to `dir`, for instance `sub\file.txt`. The handle must have
+    /// relative to `dir`, for instance `sub\file.txt`, and an error about
+    /// `dir` itself, for instance if it is not a directory, has an empty path.
+    /// The handle must have
     /// been opened with the `FILE_LIST_DIRECTORY` access right, for instance
     /// with [`std::fs::OpenOptions`] and `FILE_FLAG_BACKUP_SEMANTICS`.
     #[cfg(windows)]
@@ -266,6 +292,10 @@ impl DirEntry {
     /// Combined with [`DirEntry::file_name`], it allows acting on the entry
     /// with `*at` system calls (`openat`, `unlinkat`, `fstatat`, ...) without
     /// resolving its path again.
+    ///
+    /// The walker's guarantees do not extend to what you do with this
+    /// handle: resolving `..` or a name made of several path components
+    /// relative to it can leave the walked tree.
     #[cfg(unix)]
     pub fn parent_fd(&self) -> BorrowedFd<'_> {
         self.parent.as_fd()
@@ -277,6 +307,10 @@ impl DirEntry {
     /// with `NtCreateFile` and a root directory handle, without resolving its
     /// path again. The handle is opened with the `FILE_LIST_DIRECTORY`,
     /// `FILE_READ_ATTRIBUTES` and `SYNCHRONIZE` access rights.
+    ///
+    /// The walker's guarantees do not extend to what you do with this
+    /// handle: resolving `..` or a name made of several path components
+    /// relative to it can leave the walked tree.
     #[cfg(windows)]
     pub fn parent_handle(&self) -> BorrowedHandle<'_> {
         self.parent.as_handle()
