@@ -34,8 +34,8 @@
 //! users. See the [README](https://github.com/ririsoft/async-walkdir#security-symlinks-and-concurrent-modifications)
 //! for details and mitigations.
 //!
-//! The [`secure`] module, available with the `secure` cargo feature on Unix, provides a
-//! walker that is not affected by this race.
+//! The [`secure`] module, available with the `secure` cargo feature on Unix and Windows,
+//! provides a walker that is not affected by this race.
 //!
 //! # Example
 //!
@@ -93,13 +93,16 @@
 //! });
 //! ```
 
-#![forbid(unsafe_code)]
+// `unsafe` is only allowed in the Windows backend of the `secure` module, to
+// call Windows APIs not exposed by `std`. `forbid` cannot be relaxed locally.
+#![deny(unsafe_code)]
+#![warn(clippy::undocumented_unsafe_blocks)]
 #![deny(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod error;
-#[cfg(all(feature = "secure", unix))]
-#[cfg_attr(docsrs, doc(cfg(all(feature = "secure", unix))))]
+#[cfg(all(feature = "secure", any(unix, windows)))]
+#[cfg_attr(docsrs, doc(cfg(all(feature = "secure", any(unix, windows)))))]
 pub mod secure;
 
 use std::future::Future;
