@@ -17,7 +17,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     
     steps:
 
@@ -42,7 +42,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run cargo clippy
-        run: cargo clippy --no-deps -- -D warnings
+        run: cargo clippy --no-deps --all-targets -- -D warnings
+
+      - name: Run cargo clippy (secure feature)
+        run: cargo clippy --no-deps --all-targets --features secure -- -D warnings
       
       - name: Run cargo build
         run: cargo build
@@ -50,12 +53,15 @@ jobs:
       - name: Cargo tests 
         run: cargo test
 
+      - name: Cargo tests (secure feature)
+        run: cargo test --features secure
+
       - name: Setup cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked --version 0.9.1
 
       - name: Run code coverage test
         run: |
-          cargo llvm-cov test --fail-under-lines 90
+          cargo llvm-cov test --features secure --fail-under-lines 90
 
   workflow-lint:
     runs-on: ubuntu-latest
