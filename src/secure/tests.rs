@@ -88,17 +88,26 @@ fn walk_dir_files() -> Result<()> {
 }
 
 #[test]
-fn walk_dir_many_entries() -> Result<()> {
+fn walk_dir_batch_boundaries() -> Result<()> {
+    use std::collections::BTreeSet;
+
     block_on(async {
-        // More entries than a listing batch, to exercise batch boundaries.
-        let root = tempfile::tempdir()?;
-        let count = super::BATCH_SIZE * 3 + 1;
-        for i in 0..count {
-            async_fs::write(root.path().join(i.to_string()), []).await?;
+        // Around the size of a listing batch: every entry must be yielded
+        // exactly once, whatever the number of batches.
+        let batch = super::BATCH_SIZE;
+        for count in [batch - 1, batch, batch + 1, 2 * batch + 1] {
+            let root = tempfile::tempdir()?;
+            let want: BTreeSet<_> = (0..count)
+                .map(|i| root.path().join(i.to_string()))
+                .collect();
+            for path in &want {
+                async_fs::write(path, []).await?;
+            }
+            let (got, errors) = collect(WalkDir::new(root.path())).await;
+            assert!(errors.is_empty());
+            assert_eq!(got.len(), count, "duplicate or missing entries");
+            assert_eq!(got.into_iter().collect::<BTreeSet<_>>(), want);
         }
-        let (got, errors) = collect(WalkDir::new(root.path())).await;
-        assert_eq!(got.len(), count);
-        assert!(errors.is_empty());
         Ok(())
     })
 }
@@ -188,6 +197,42 @@ fn entry_outlives_walker() -> Result<()> {
 }
 
 #[test]
+fn entry_accessors() -> Result<()> {
+    use std::collections::HashSet;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    block_on(async {
+        let root = tempfile::tempdir()?;
+        make_tree(root.path()).await?;
+        // A modification time before the Unix epoch, to exercise the
+        // conversion of negative timestamps.
+        let before_epoch = UNIX_EPOCH - Duration::from_secs(86_400);
+        std::fs::File::options()
+            .write(true)
+            .open(root.path().join("f1.txt"))?
+            .set_modified(before_epoch)?;
+
+        let dir = find(root.path(), &root.path().join("d1")).await;
+        assert!(format!("{dir:?}").contains("d1"));
+        let dir_md = dir.metadata().await?;
+        assert!(dir_md.is_dir() && !dir_md.is_file() && !dir_md.is_symlink());
+        dir_md.accessed()?;
+        // The creation time is not recorded everywhere.
+        if let Err(e) = dir_md.created() {
+            assert_eq!(e.kind(), ErrorKind::Unsupported);
+        }
+
+        let file = find(root.path(), &root.path().join("f1.txt")).await;
+        let file_md = file.metadata().await?;
+        assert_eq!(file_md.modified()?, before_epoch);
+
+        let types: HashSet<_> = [dir_md.file_type(), file_md.file_type()].into();
+        assert_eq!(types.len(), 2);
+        Ok(())
+    })
+}
+
+#[test]
 fn walker_is_send() {
     fn assert_send<T: Send>(_: T) {}
     let wd = WalkDir::new("foo");
@@ -207,6 +252,7 @@ mod unix {
 
     use futures_lite::future::block_on;
     use futures_lite::io::AsyncReadExt;
+    use futures_lite::stream::StreamExt;
     use rustix::fs::{Mode, OFlags};
 
     use super::{collect, find, make_tree};
@@ -371,6 +417,39 @@ mod unix {
     }
 
     #[test]
+    fn file_type_ext() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            make_tree(root.path()).await?;
+            let entry = find(root.path(), &root.path().join("f1.txt")).await;
+            let ft = entry.file_type().await?;
+            assert!(!ft.is_fifo() && !ft.is_socket());
+            assert!(!ft.is_block_device() && !ft.is_char_device());
+            let md = entry.metadata().await?;
+            let std_md = std::fs::symlink_metadata(entry.path())?;
+            assert_eq!(md.dev(), std::os::unix::fs::MetadataExt::dev(&std_md));
+            assert_eq!(md.gid(), std::os::unix::fs::MetadataExt::gid(&std_md));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn from_fd_not_a_dir() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            make_tree(root.path()).await?;
+            let file = std::fs::File::open(root.path().join("f1.txt"))?;
+            let mut wd = WalkDir::from_fd(file.into());
+            match wd.next().await {
+                Some(Err(e)) => assert_eq!(e.path().unwrap(), std::path::Path::new("")),
+                other => panic!("want an error, got {other:?}"),
+            }
+            assert!(wd.next().await.is_none());
+            Ok(())
+        })
+    }
+
+    #[test]
     fn from_fd_yields_relative_paths() -> Result<()> {
         block_on(async {
             let root = tempfile::tempdir()?;
@@ -397,6 +476,7 @@ mod windows {
     use std::process::Command;
 
     use futures_lite::future::block_on;
+    use futures_lite::stream::StreamExt;
 
     use super::{collect, find, make_tree};
     use crate::secure::{MetadataExt, WalkDir};
@@ -517,6 +597,22 @@ mod windows {
 
             let parent = std::fs::File::from(entry.parent_handle().try_clone_to_owned()?);
             assert!(parent.metadata()?.is_dir());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn from_handle_not_a_dir() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            make_tree(root.path()).await?;
+            let file = std::fs::File::open(root.path().join("f1.txt"))?;
+            let mut wd = WalkDir::from_handle(file.into());
+            match wd.next().await {
+                Some(Err(e)) => assert_eq!(e.path().unwrap(), Path::new("")),
+                other => panic!("want an error, got {other:?}"),
+            }
+            assert!(wd.next().await.is_none());
             Ok(())
         })
     }
