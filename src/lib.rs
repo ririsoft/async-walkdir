@@ -22,6 +22,18 @@
 //!
 //! Symbolic links are walked through but they are not followed.
 //!
+//! # Security
+//!
+//! The "symlinks are not followed" guarantee only holds while the directory tree is not
+//! modified concurrently. Directories are checked, then opened again by path: a
+//! concurrent process able to write to the tree can swap a directory for a symlink in
+//! between and make the walk escape the root directory (a TOCTOU race, similar to
+//! [CVE-2022-21658](https://blog.rust-lang.org/2022/01/20/cve-2022-21658.html)).
+//!
+//! Do not rely on it when a privileged process walks a tree writable by less privileged
+//! users. See the [README](https://github.com/ririsoft/async-walkdir#security-symlinks-and-concurrent-modifications)
+//! for details and mitigations.
+//!
 //! # Example
 //!
 //! Recursively traverse a directory:
