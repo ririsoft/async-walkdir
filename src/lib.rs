@@ -34,6 +34,9 @@
 //! users. See the [README](https://github.com/ririsoft/async-walkdir#security-symlinks-and-concurrent-modifications)
 //! for details and mitigations.
 //!
+//! The [`secure`] module, available with the `secure` cargo feature on Unix, provides a
+//! walker that is not affected by this race.
+//!
 //! # Example
 //!
 //! Recursively traverse a directory:
@@ -92,8 +95,12 @@
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod error;
+#[cfg(all(feature = "secure", unix))]
+#[cfg_attr(docsrs, doc(cfg(all(feature = "secure", unix))))]
+pub mod secure;
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
