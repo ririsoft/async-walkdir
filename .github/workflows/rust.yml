@@ -63,6 +63,36 @@ jobs:
         run: |
           cargo llvm-cov test --features secure --fail-under-lines 90
 
+  # Checks that the crate compiles with the `rust-version` of Cargo.toml, as
+  # recommended by the Cargo book: `cargo check` only, on one runner, with the
+  # other platforms type-checked through their targets (no linking needed).
+  msrv:
+    runs-on: ubuntu-latest
+    env:
+      # No Cargo.lock is committed: pick dependency versions compatible with
+      # the `rust-version` of Cargo.toml.
+      CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: "1.85.0"
+          targets: x86_64-pc-windows-msvc, aarch64-apple-darwin
+
+      - name: Cargo check
+        run: cargo check --all-targets
+
+      - name: Cargo check (secure feature)
+        run: |
+          for target in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-apple-darwin; do
+            cargo check --all-targets --features secure --target "$target"
+          done
+
   workflow-lint:
     runs-on: ubuntu-latest
     env:
