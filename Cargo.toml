@@ -13,11 +13,23 @@ documentation = "https://docs.rs/async-walkdir/"
 exclude = [ "/.github/*" ]
 readme = "README.md"
 
+[features]
+# Walker resistant to symlink races, see the `secure` module (Unix only).
+secure = ["dep:blocking", "dep:rustix"]
+
 [dependencies]
 futures-lite = "2.6"
 async-fs = "2.2"
 thiserror = "2.0"
+blocking = { version = "1.6", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["fs"], optional = true }
 
 [dev-dependencies]
 tempfile = "3.27"
 tokio = { version = "1.53", features = ["rt-multi-thread"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
