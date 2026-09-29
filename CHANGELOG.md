@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 ### Changed
+
+- Declared the minimum supported Rust version (MSRV): 1.85. It was already required by
+  the dependencies and is now checked by the CI. See the README for the MSRV policy.
+
 ### Deprecated
 ### Removed
 ### Security

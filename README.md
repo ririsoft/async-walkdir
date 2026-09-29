@@ -31,6 +31,14 @@ block_on(async {
 });
 ```
 
+# Minimum supported Rust version
+
+The minimum supported Rust version (MSRV) is **1.85**, with every Cargo feature and on
+every supported platform. It is checked by the CI.
+
+The MSRV may be raised in a minor release, never in a patch release. Rust versions released
+during the last 12 months remain supported.
+
 # Security: symlinks and concurrent modifications
 
 `WalkDir` does not follow symbolic links: a symlink is yielded as an entry but the walker

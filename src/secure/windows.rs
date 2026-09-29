@@ -321,10 +321,8 @@ fn parse_listing(bytes: &[u8], out: &mut VecDeque<io::Result<RawEntry>>) -> io::
         let name_end = name_start.checked_add(name_len).ok_or_else(malformed)?;
         let name = record.get(name_start..name_end).ok_or_else(malformed)?;
         let name: Vec<u16> = name
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|c| u16::from_ne_bytes(*c))
+            .chunks_exact(2)
+            .map(|c| u16::from_ne_bytes([c[0], c[1]]))
             .collect();
 
         if name != [u16::from(b'.')] && name != [u16::from(b'.'), u16::from(b'.')] {
