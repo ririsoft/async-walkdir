@@ -35,7 +35,8 @@
 //! for details and mitigations.
 //!
 //! The [`secure`] module, available with the `secure` cargo feature on Unix and Windows,
-//! provides a walker that is not affected by this race.
+//! provides a walker that is not affected by this race. It is experimental and looking for
+//! feedback.
 //!
 //! # Example
 //!
