@@ -56,6 +56,13 @@ like they are inside it (`root/uploads/passwd`). A check such as
 `entry.path().starts_with(root)` does not detect it. The swap can be repeated deeper in
 the tree, and replacing any *parent* directory has the same effect.
 
+The unit test `known_limitation_swapped_dir_is_followed` in [`src/lib.rs`](src/lib.rs)
+reproduces this attack deterministically on Unix and Windows. It swaps a directory for a
+symlink (a junction on Windows) at the right time and checks that the walk escapes the
+root. Run it with `cargo test known_limitation`. The `secure` walker described below
+passes the same scenario without escaping: run
+`cargo test --features secure swapped_dir_is_not_followed`.
+
 This is a classic time-of-check to time-of-use (TOCTOU) race. It is the same class of issue
 as [CVE-2022-21658][8] in `std::fs::remove_dir_all`, and it also affects the synchronous
 [walkdir][1] crate ([BurntSushi/walkdir#209][9]).
