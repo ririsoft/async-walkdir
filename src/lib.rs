@@ -453,6 +453,66 @@ mod tests {
             Ok(())
         })
     }
+
+    /// Replaces the directory `link` with a link to `target`: a symbolic link
+    /// on Unix, a junction on Windows (which requires no privilege).
+    #[cfg(any(unix, windows))]
+    fn swap_for_link(link: &std::path::Path, target: &std::path::Path) -> Result<()> {
+        std::fs::remove_dir(link)?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link)?;
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .status()?;
+            assert!(status.success(), "mklink /J failed: {status}");
+        }
+        Ok(())
+    }
+
+    /// Demonstrates the known symlink TOCTOU race of `WalkDir`, documented in
+    /// the README "Security" section and fixed by the `secure` walker (see its
+    /// `swapped_dir_is_not_followed` tests).
+    ///
+    /// The filter runs after `WalkDir` has checked that `d1` is a directory
+    /// and before it opens `d1` by path: swapping `d1` for a link there makes
+    /// the walk escape the root. If `WalkDir` ever gets fixed, this test fails
+    /// and must be inverted, and the documentation updated.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn known_limitation_swapped_dir_is_followed() -> Result<()> {
+        block_on(async {
+            let root = tempfile::tempdir()?;
+            let outside = tempfile::tempdir()?;
+            async_fs::write(outside.path().join("secret"), "secret").await?;
+            let d1 = root.path().join("d1");
+            async_fs::create_dir(&d1).await?;
+
+            let (swapped, target) = (d1.clone(), outside.path().to_owned());
+            let mut wd = WalkDir::new(root.path()).filter(move |entry| {
+                let (swapped, target) = (swapped.clone(), target.clone());
+                async move {
+                    if entry.path() == swapped {
+                        swap_for_link(&swapped, &target).unwrap();
+                    }
+                    Filtering::Continue
+                }
+            });
+            let mut got = Vec::new();
+            while let Some(entry) = wd.next().await {
+                got.push(entry.unwrap().path());
+            }
+            // The secret file located outside of the root is yielded, with a
+            // path that looks like it is inside the root.
+            let escaped = d1.join("secret");
+            assert!(escaped.starts_with(root.path()));
+            assert!(got.contains(&escaped), "walk did not escape: {got:?}");
+            Ok(())
+        })
+    }
 }
 
 #[cfg(all(unix, test))]
